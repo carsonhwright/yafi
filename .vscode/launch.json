@@ -1,0 +1,34 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run query_machine.py",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.yafi-venv/Scripts/python.exe",
+      "program": "${workspaceFolder}/yafi/query_machine.py",
+      "cwd": "${workspaceFolder}/yafi",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Run query_machine.py (custom config)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.yafi-venv/Scripts/python.exe",
+      "program": "${workspaceFolder}/yafi/query_machine.py",
+      "args": ["${input:configPath}"],
+      "cwd": "${workspaceFolder}/yafi",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    }
+  ],
+  "inputs": [
+    {
+      "id": "configPath",
+      "type": "promptString",
+      "description": "Path to query config JSON (relative to yafi/, e.g. configs/query_config.json)",
+      "default": "configs/query_config.json"
+    }
+  ]
+}

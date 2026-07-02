@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yafi"
+version = "0.1.0"
+description = "JSON-configurable yfinance screener queries"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "yfinance>=1.5.1",
+]
+
+[project.scripts]
+yafi = "yafi.query_machine:main"
+
+[tool.setuptools]
+packages = ["yafi"]
+
+[tool.setuptools.package-data]
+yafi = ["configs/*.json"]

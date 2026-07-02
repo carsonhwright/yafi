@@ -1,0 +1,3 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/.yafi-venv/Scripts/python.exe"
+}

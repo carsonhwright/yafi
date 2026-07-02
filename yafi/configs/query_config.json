@@ -1,0 +1,21 @@
+{
+  "quote_type": "equity",
+  "query": {
+    "operator": "and",
+    "operands": [
+      {"operator": "lt", "operands": ["peratio.lasttwelvemonths", 20]},
+      {"operator": "is-in", "operands": ["exchange", "NMS", "NYQ"]},
+      {"operator": "gt", "operands": ["intradaymarketcap", 15000000000]}
+    ]
+  },
+  "sort_field": "peratio.lasttwelvemonths",
+  "sort_asc": true,
+  "page_size": 250,
+  "max_results": null,
+  "request_delay_seconds": 0.5,
+  "fields": ["symbol", "trailingPE", "forwardPE", "exchange", "marketCap", "longName"],
+  "output": {
+    "format": "json",
+    "path": "output/results.json"
+  }
+}
