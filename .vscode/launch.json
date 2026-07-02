@@ -17,7 +17,11 @@
       "request": "launch",
       "python": "${workspaceFolder}/.yafi-venv/Scripts/python.exe",
       "program": "${workspaceFolder}/yafi/query_machine.py",
-      "args": ["${input:configPath}"],
+      "args": ["${input:configFileName}"],
+      "cwd": "${workspaceFolder}/yafi",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
       "cwd": "${workspaceFolder}/yafi",
       "console": "integratedTerminal",
       "justMyCode": true
@@ -25,10 +29,10 @@
   ],
   "inputs": [
     {
-      "id": "configPath",
+      "id": "configFileName",
       "type": "promptString",
-      "description": "Path to query config JSON (relative to yafi/, e.g. configs/query_config.json)",
-      "default": "configs/query_config.json"
+      "description": "Filename to query config JSON (relative to yafi/configs, e.g. query_config.json)",
+      "default": "query_config.json"
     }
   ]
 }

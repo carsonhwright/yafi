@@ -89,7 +89,60 @@ yafi path/to/other.json                             # same, if installed as a pa
 | `output.format` | string | `json`, `csv`, or `both`. |
 | `output.path` | string | Output file path (relative to cwd). With `format: "both"`, `.json`/`.csv` extensions are applied automatically. |
 
-Note the two "vocabularies" at play: fields inside `query` use Yahoo's internal **query field names** (e.g. `intradaymarketcap`, `peratio.lasttwelvemonths`) — see the tables below. Fields listed in the top-level `fields` array are **response keys** from the returned quote object (e.g. `marketCap`, `trailingPE`), which don't always match the query field name for the same underlying value.
+Note the two "vocabularies" at play: fields inside `query` use Yahoo's internal **query field names** (e.g. `intradaymarketcap`, `peratio.lasttwelvemonths`) — see **`quote_type` values and their query fields** below. Fields listed in the top-level `fields` array are **response keys** from the returned quote object (e.g. `marketCap`, `trailingPE`) — a different vocabulary, documented in **Output fields** below.
+
+## Output fields (what goes in `results.json`)
+
+The `fields` array picks keys out of Yahoo's raw quote object — the same object you'd get back with `fields` omitted entirely. Unlike the query fields above, **this is not a fixed schema**: Yahoo only includes a key when it has data for it, so the exact set varies by ticker and by `quote_type` (e.g. a foreign-listed stock may lack `forwardPE`; a mutual fund has no `bid`/`ask`). Treat the tables below as "commonly present, sampled from real responses," not a guarantee.
+
+To see the full, ungapped set of fields available for your specific query, run it once with `"fields": null` and inspect the keys of the resulting objects in `results.json`.
+
+### `equity` — commonly available fields (sampled from 50 quotes)
+
+| Field | Type | Example |
+|---|---|---|
+| `symbol`, `shortName`, `longName`, `exchange`, `fullExchangeName`, `region`, `currency`, `financialCurrency` | str | `'NVDA'`, `'NVIDIA Corporation'`, `'NMS'` |
+| `quoteType`, `typeDisp`, `market`, `marketState`, `quoteSourceName` | str | `'EQUITY'`, `'REGULAR'` |
+| `regularMarketPrice`, `regularMarketOpen`, `regularMarketDayHigh`, `regularMarketDayLow`, `regularMarketPreviousClose` | float | `651000.0` |
+| `regularMarketChange`, `regularMarketChangePercent`, `regularMarketVolume`, `regularMarketTime` | float/int | `-23000.0` |
+| `regularMarketDayRange`, `fiftyTwoWeekRange` | str | `'651000.0 - 668000.0'` |
+| `fiftyTwoWeekHigh`, `fiftyTwoWeekLow`, `fiftyTwoWeekChangePercent`, `fiftyTwoWeekHighChange`, `fiftyTwoWeekLowChange`, `fiftyTwoWeekHighChangePercent`, `fiftyTwoWeekLowChangePercent` | float | `894740.0` |
+| `fiftyDayAverage`, `fiftyDayAverageChange`, `fiftyDayAverageChangePercent`, `twoHundredDayAverage`, `twoHundredDayAverageChange`, `twoHundredDayAverageChangePercent` | float | `757424.8` |
+| `marketCap`, `sharesOutstanding`, `impliedSharesOutstanding`, `bookValue`, `priceToBook` | int/float | `41229283328` |
+| `trailingPE`, `forwardPE`, `epsTrailingTwelveMonths`, `epsForward`, `epsCurrentYear`, `priceEpsCurrentYear` | float | `17.327188` |
+| `dividendRate`, `dividendYield`, `trailingAnnualDividendRate`, `trailingAnnualDividendYield` | float | `1.1` |
+| `averageAnalystRating` | str | `'1.4 - Strong Buy'` |
+| `bid`, `ask`, `bidSize`, `askSize` | float/int | `37.6` |
+| `averageDailyVolume10Day`, `averageDailyVolume3Month` | int | `214` |
+| `earningsTimestamp`, `earningsTimestampStart`, `earningsTimestampEnd`, `earningsCallTimestampStart`, `earningsCallTimestampEnd`, `isEarningsDateEstimate` | int/bool | `1779307200` |
+| `firstTradeDateMilliseconds`, `sourceInterval`, `exchangeDataDelayedBy`, `priceHint`, `gmtOffSetMilliseconds` | int | `1305525600000` |
+| `exchangeTimezoneName`, `exchangeTimezoneShortName`, `messageBoardId` | str | `'America/New_York'` |
+| `esgPopulated`, `tradeable`, `cryptoTradeable`, `hasPrePostMarketData`, `triggerable` | bool | `False` |
+| `customPriceAlertConfidence`, `corporateActions` | str/list | `'LOW'`, `[]` |
+
+### `fund` — commonly available fields (sampled from 5 quotes)
+
+Mostly overlaps with the equity list above (`symbol`, `longName`, `exchange`, `regularMarket*`, `fiftyTwoWeek*`, `fiftyDayAverage*`, `twoHundredDayAverage*`, `trailingPE`, `dividendRate`/`dividendYield`), plus fund-specific fields:
+
+| Field | Type | Example |
+|---|---|---|
+| `netAssets` | float | `123196336.0` |
+| `netExpenseRatio` | float | `1.0` |
+| `ytdReturn` | float | `6.43178` |
+| `trailingThreeMonthReturns` | float | `16.33497` |
+| `quoteType` | str | `'MUTUALFUND'` |
+
+### `etf` — commonly available fields (sampled from 5 quotes)
+
+Also mostly overlaps with the equity list (including `bid`/`ask` and `trailingPE`, unlike funds), plus:
+
+| Field | Type | Example |
+|---|---|---|
+| `netAssets` | float | `142385936.0` |
+| `ytdReturn` | float | `10.08174` |
+| `trailingThreeMonthReturns`, `trailingThreeMonthNavReturns` | float | `3.2812` |
+| `dividendDate` | int | `1617580800` |
+| `quoteType` | str | `'ETF'` |
 
 ## Query operators
 

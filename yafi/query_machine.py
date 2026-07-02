@@ -92,11 +92,11 @@ def write_output(records, output_config, fields):
 
 def main():
     parser = argparse.ArgumentParser(description='Run a JSON-configured yfinance screener query.')
-    parser.add_argument('config', nargs='?', default=str(Path(__file__).parent / 'configs/query_config.json'),
+    parser.add_argument('config', nargs='?', default='query_config.json',
                          help='Path to the JSON query config file.')
     args = parser.parse_args()
 
-    config = load_config(args.config)
+    config = load_config(Path("configs") / args.config)
 
     quote_type = config.get('quote_type', 'equity').lower()
     query_cls = QUOTE_TYPE_MAP.get(quote_type)

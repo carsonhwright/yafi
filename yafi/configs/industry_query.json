@@ -1,0 +1,22 @@
+{
+  "quote_type": "equity",
+  "query": {
+    "operator": "and",
+    "operands": [
+      {"operator": "eq", "operands": ["sector", "Technology"]},
+      {"operator": "is-in", "operands": ["industry", "Semiconductors", "Semiconductor Equipment & Materials"]},
+      {"operator": "is-in", "operands": ["exchange", "NMS", "NYQ"]},
+      {"operator": "gt", "operands": ["intradaymarketcap", 5000000000]}
+    ]
+  },
+  "sort_field": "intradaymarketcap",
+  "sort_asc": false,
+  "page_size": 250,
+  "max_results": null,
+  "request_delay_seconds": 0.5,
+  "fields": ["symbol", "longName", "exchange", "marketCap", "trailingPE", "forwardPE"],
+  "output": {
+    "format": "json",
+    "path": "output/industry_results.json"
+  }
+}
