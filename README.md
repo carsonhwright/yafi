@@ -229,6 +229,35 @@ etf = yf.ETFQuery('gt', ['initialinvestment', 1])
 etf.valid_values['fundfamilyname']
 ```
 
+## GUI config builder
+
+`yafi/interface.py` is a Tkinter app for building/editing config files without hand-writing JSON:
+
+```bash
+python yafi/interface.py
+```
+
+Pick a `quote_type`, add conditions (field/operator/value — constrained fields like `exchange` or `sector` get a picker populated from yfinance's own valid-value lists instead of free text), set sort/pagination/output settings, then **Save** to `yafi/configs/<name>.json`. **Load** reads an existing config back into the form — it handles the flat AND/OR-of-conditions shape every config in this repo uses; nested and/or groups aren't supported by the UI and it'll tell you to edit the JSON directly rather than silently mangling it.
+
+**Save & run query_machine.py** (below the preview panel) writes the current form to the filename you entered and immediately runs `query_machine.py` against it in a background subprocess, streaming its console output (page-by-page fetch progress, final result count) into a read-only log box so you don't have to switch to a terminal.
+
+**Plot results with ticker_time.py (plotly)**, next to it, runs `ticker_time.py` against the JSON results file named in the **Output** section above (`output.path`, adjusted for `.json`/`.both` — if `output.format` is `csv` it'll tell you to switch to `json`/`both` and run query_machine.py first) with `--engine plotly`, saves the dashboard as `<results file stem>_dashboard.html` next to it, and opens it in your default browser once the subprocess exits successfully.
+
+## Plotting ticker time series
+
+`yafi/ticker_time.py` takes the `symbol` field out of a results JSON (the output of `query_machine.py`) and plots historical price history for those tickers via `yfinance.Ticker(...).history(...)`.
+
+```bash
+python yafi/ticker_time.py                                          # uses output/results.json, matplotlib, top 10 symbols
+python yafi/ticker_time.py output/industry_results.json --limit 5   # a different results file, fewer tickers
+python yafi/ticker_time.py --symbols NVDA,AMD,INTC --period 1y      # explicit symbols instead of a results file
+python yafi/ticker_time.py --engine plotly --output output/dashboard.html   # interactive HTML dashboard
+```
+
+Key options: `--period`/`--interval` (passed straight to `yfinance`'s `history()`), `--value-field` (`Open`/`High`/`Low`/`Close`/`Volume`, default `Close`), `--no-normalize` (by default every series is indexed to 100 at its start so tickers with very different price scales are comparable on one chart), and `--engine matplotlib` (quick static plot, opens a window or saves a `.png` with `--output`) vs `--engine plotly` (interactive dashboard with hover/zoom/range-slider, opens a browser tab or saves a self-contained `.html` with `--output`).
+
+`matplotlib`/`plotly` are an optional extra, not part of the core install: `pip install ".[plot]"` (already included if you used `requirements.txt`/`scripts/setup.*`).
+
 ## VS Code
 
 `.vscode/launch.json` includes two debug configurations that use the `.yafi-venv` interpreter: "Run query_machine.py" (default config) and "Run query_machine.py (custom config)" (prompts for a config path).

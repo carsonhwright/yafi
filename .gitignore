@@ -1,1 +1,7 @@
 .yafi-venv/
+yafi/output/*.json
+yafi/output/*.csv
+yafi/output/*.png
+yafi/output/*.html
+*.pyc
+__pycache__/

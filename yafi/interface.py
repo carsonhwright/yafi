@@ -1,5 +1,10 @@
 import json
+import queue
+import subprocess
+import sys
+import threading
 import tkinter as tk
+import webbrowser
 from pathlib import Path
 from tkinter import messagebox, scrolledtext, ttk
 
@@ -54,10 +59,18 @@ class AutocompleteCombobox(ttk.Combobox):
         self._all_values = list(values)
         self['values'] = self._all_values
         self.bind('<KeyRelease>', self._on_keyrelease)
+        self._slow_down_dropdown_scroll()
 
     def set_values(self, values):
         self._all_values = list(values)
         self['values'] = self._all_values
+
+    def _slow_down_dropdown_scroll(self):
+        # ttk's default popdown listbox binding scrolls 3-4 lines per wheel notch; force 1.
+        listbox = self.tk.eval(f'ttk::combobox::PopdownWindow {self}') + '.f.l'
+        callback = self.register(lambda delta: self.tk.call(
+            listbox, 'yview', 'scroll', -1 if int(delta) >= 0 else 1, 'units'))
+        self.tk.call('bind', listbox, '<MouseWheel>', f'{callback} %D; break')
 
     def _on_keyrelease(self, event):
         if event.keysym in ('Up', 'Down', 'Left', 'Right', 'Return', 'Escape', 'Tab'):
@@ -74,7 +87,7 @@ class ConfigBuilderApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title('yafi query config builder')
-        self.geometry('900x800')
+        self.geometry('900x980')
 
         self.conditions = []
         self.output_fields = []
@@ -198,6 +211,18 @@ class ConfigBuilderApp(tk.Tk):
         preview_frame.pack(fill='both', expand=True, **pad)
         self.preview_text = scrolledtext.ScrolledText(preview_frame, height=10, wrap='none')
         self.preview_text.pack(fill='both', expand=True)
+
+        run_frame = ttk.LabelFrame(self, text='Run')
+        run_frame.pack(fill='both', **pad)
+        run_buttons_row = ttk.Frame(run_frame)
+        run_buttons_row.pack(fill='x', padx=6, pady=4)
+        self.run_button = ttk.Button(run_buttons_row, text='Save & run query_machine.py', command=self._run_query_machine)
+        self.run_button.pack(side='left')
+        self.plot_button = ttk.Button(run_buttons_row, text='Plot results with ticker_time.py (plotly)',
+                                       command=self._plot_with_ticker_time)
+        self.plot_button.pack(side='left', padx=(8, 0))
+        self.run_output = scrolledtext.ScrolledText(run_frame, height=8, wrap='word', state='disabled')
+        self.run_output.pack(fill='both', expand=True, padx=6, pady=(0, 6))
 
     def _on_field_keyrelease(self, event):
         AutocompleteCombobox._on_keyrelease(self.field_box, event)
@@ -348,22 +373,139 @@ class ConfigBuilderApp(tk.Tk):
         self.preview_text.insert('1.0', text)
         return config
 
-    def _save_config(self):
-        config = self._refresh_preview()
-        if config is None:
-            return
+    def _resolve_filename(self):
         filename = self.filename_entry.get().strip()
         if not filename:
-            messagebox.showerror('Missing filename', 'Enter a filename to save to.')
-            return
+            return None
         if not filename.endswith('.json'):
             filename += '.json'
+        return filename
 
+    def _write_config(self, config, filename):
         CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
         path = CONFIGS_DIR / filename
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(config, f, indent=2)
+        return path
+
+    def _save_config(self):
+        config = self._refresh_preview()
+        if config is None:
+            return
+        filename = self._resolve_filename()
+        if not filename:
+            messagebox.showerror('Missing filename', 'Enter a filename to save to.')
+            return
+        path = self._write_config(config, filename)
         messagebox.showinfo('Saved', f'Wrote {path}')
+
+    def _run_query_machine(self):
+        config = self._refresh_preview()
+        if config is None:
+            return
+        filename = self._resolve_filename()
+        if not filename:
+            messagebox.showerror('Missing filename', 'Enter a filename to save to.')
+            return
+        self._write_config(config, filename)
+
+        script = Path(__file__).resolve().parent / 'query_machine.py'
+        self._run_subprocess_streaming(
+            [sys.executable, str(script), filename], self.run_button,
+            header=f'python query_machine.py {filename}')
+
+    def _resolve_results_json_path(self):
+        fmt = self.output_format.get()
+        if fmt == 'csv':
+            return None
+        path = Path(self.output_path_entry.get().strip() or 'output/results.json')
+        if fmt == 'both':
+            path = path.with_suffix('.json')
+        script_dir = Path(__file__).resolve().parent
+        return path if path.is_absolute() else script_dir / path
+
+    def _plot_with_ticker_time(self):
+        results_path = self._resolve_results_json_path()
+        if results_path is None:
+            messagebox.showerror(
+                'No JSON results',
+                "output.format is 'csv' - ticker_time.py needs a JSON results file. "
+                "Set format to 'json' or 'both' and run query_machine.py first.")
+            return
+        if not results_path.exists():
+            messagebox.showerror('Results not found',
+                                  f'{results_path} does not exist yet. Run query_machine.py first.')
+            return
+
+        dashboard_path = results_path.parent / f'{results_path.stem}_dashboard.html'
+        script = Path(__file__).resolve().parent / 'ticker_time.py'
+        args = [sys.executable, str(script), str(results_path), '--engine', 'plotly',
+                '--output', str(dashboard_path)]
+
+        def open_dashboard():
+            if dashboard_path.exists():
+                webbrowser.open(dashboard_path.resolve().as_uri())
+
+        self._run_subprocess_streaming(
+            args, self.plot_button,
+            header=f'python ticker_time.py {results_path.name} --engine plotly --output {dashboard_path.name}',
+            on_success=open_dashboard)
+
+    def _run_subprocess_streaming(self, args, button, header, on_success=None):
+        output_queue = queue.Queue()
+        result = {}
+
+        button.config(state='disabled')
+        self.run_output.config(state='normal')
+        self.run_output.insert('end', f'\n$ {header}\n')
+        self.run_output.config(state='disabled')
+        self.run_output.see('end')
+
+        def worker():
+            try:
+                process = subprocess.Popen(
+                    args,
+                    cwd=str(Path(__file__).resolve().parent),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                )
+                for line in process.stdout:
+                    output_queue.put(line)
+                process.wait()
+                result['returncode'] = process.returncode
+                output_queue.put(f'\n[exited with code {process.returncode}]\n')
+            except Exception as exc:
+                result['returncode'] = None
+                output_queue.put(f'\n[failed to launch: {exc}]\n')
+            finally:
+                output_queue.put(None)
+
+        def poll():
+            finished = False
+            try:
+                while True:
+                    line = output_queue.get_nowait()
+                    if line is None:
+                        finished = True
+                        break
+                    self.run_output.config(state='normal')
+                    self.run_output.insert('end', line)
+                    self.run_output.see('end')
+                    self.run_output.config(state='disabled')
+            except queue.Empty:
+                pass
+
+            if finished:
+                button.config(state='normal')
+                if on_success and result.get('returncode') == 0:
+                    on_success()
+            else:
+                self.after(100, poll)
+
+        threading.Thread(target=worker, daemon=True).start()
+        self.after(100, poll)
 
     def _load_config(self):
         filename = self.filename_entry.get().strip()
