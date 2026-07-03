@@ -241,22 +241,33 @@ Pick a `quote_type`, add conditions (field/operator/value — constrained fields
 
 **Save & run query_machine.py** (below the preview panel) writes the current form to the filename you entered and immediately runs `query_machine.py` against it in a background subprocess, streaming its console output (page-by-page fetch progress, final result count) into a read-only log box so you don't have to switch to a terminal.
 
-**Plot results with ticker_time.py (plotly)**, next to it, runs `ticker_time.py` against the JSON results file named in the **Output** section above (`output.path`, adjusted for `.json`/`.both` — if `output.format` is `csv` it'll tell you to switch to `json`/`both` and run query_machine.py first) with `--engine plotly`, saves the dashboard as `<results file stem>_dashboard.html` next to it, and opens it in your default browser once the subprocess exits successfully.
+**Launch live dashboard (ticker_time.py, dash)**, next to it, runs `ticker_time.py --engine dash` against the JSON results file named in the **Output** section above (`output.path`, adjusted for `.json`/`.both` — if `output.format` is `csv` it'll tell you to switch to `json`/`both` and run query_machine.py first). Unlike the query_machine button, this starts a server that keeps running — the button watches the subprocess's log for a "ready" line, opens your browser to it as soon as it's up, and turns into a **Stop live dashboard** button while the server is alive. Closing the GUI window terminates it too, so it can't be left running as an orphaned background process.
 
 ## Plotting ticker time series
 
-`yafi/ticker_time.py` takes the `symbol` field out of a results JSON (the output of `query_machine.py`) and plots historical price history for those tickers via `yfinance.Ticker(...).history(...)`.
+`yafi/ticker_time.py` takes the `symbol` field out of a results JSON (the output of `query_machine.py`) and plots historical price history for those tickers via `yfinance.Ticker(...).history(...)`. It has two engines with genuinely different tradeoffs, not just different looks:
 
 ```bash
-python yafi/ticker_time.py                                          # uses output/results.json, matplotlib, top 10 symbols
-python yafi/ticker_time.py output/industry_results.json --limit 5   # a different results file, fewer tickers
+python yafi/ticker_time.py                                          # uses output/results.json, matplotlib, every symbol found
+python yafi/ticker_time.py output/industry_results.json --limit 5   # a different results file, capped to 5 tickers
 python yafi/ticker_time.py --symbols NVDA,AMD,INTC --period 1y      # explicit symbols instead of a results file
-python yafi/ticker_time.py --engine plotly --output output/dashboard.html   # interactive HTML dashboard
+python yafi/ticker_time.py --engine dash                            # live dashboard at http://127.0.0.1:8050/
 ```
 
-Key options: `--period`/`--interval` (passed straight to `yfinance`'s `history()`), `--value-field` (`Open`/`High`/`Low`/`Close`/`Volume`, default `Close`), `--no-normalize` (by default every series is indexed to 100 at its start so tickers with very different price scales are comparable on one chart), and `--engine matplotlib` (quick static plot, opens a window or saves a `.png` with `--output`) vs `--engine plotly` (interactive dashboard with hover/zoom/range-slider, opens a browser tab or saves a self-contained `.html` with `--output`).
+**`--engine matplotlib`** (default): eager and static. Fetches every symbol up front (respecting `--request-delay-seconds` between calls) into one overlaid line chart of raw `--value-field` values. Opens a window, or saves a `.png` with `--output`.
 
-`matplotlib`/`plotly` are an optional extra, not part of the core install: `pip install ".[plot]"` (already included if you used `requirements.txt`/`scripts/setup.*`).
+**`--engine dash`**: a live local server (`yafi/dashboard.py`), not a static file.
+
+- **Sidebar (left)**: tickers are grouped into collapsible sections of up to 100 (`html.Details`/`Summary`, only the first section open by default), each a plain vertical checkbox list. The sidebar has a fixed width and scrolls independently (`maxHeight: 85vh`) so it doesn't grow the whole page.
+- **Charts (right)**: nothing is fetched until you check a box. Checking one fetches that ticker (only that one — logged server-side, e.g. `fetching NVDA (period=6mo interval=1d)` / `fetched NVDA: 124 rows in 0.42s`) and drops its chart into a 4-column grid, filling left-to-right/top-to-bottom in the order you check things (not each ticker's position in the results file). Unchecking hides a chart without discarding it — re-checking re-shows it instantly and moves it to the end of the current order. The chart/sidebar split uses `minWidth: 0` on the chart side specifically so the grid shrinks to fit next to the sidebar instead of forcing the page wider than the window.
+- **Field table**: if the results JSON had a `fields` list (i.e. it wasn't every raw field Yahoo returns), every field from that ticker's record is shown as a table directly under its chart — the same data that ended up in `results.json`, not just price history. Explicit `--symbols` (bypassing a results file) has no record to show, so those charts just don't get a table.
+- Runs with Dash's debug mode on (in-browser callback graph and error overlays) and its own `logging` output on the console, for exactly the kind of "what is this dashboard doing" debugging this was built for; `use_reloader` is off so it stays a single supervisable process. `--port` picks the port (default 8050); `--output` doesn't apply here — there's no file, just a running server you stop with Ctrl-C (or the GUI's Stop button).
+
+The core logic behind the dash engine (`compute_check_order`, `render_charts` in `yafi/dashboard.py`) is deliberately kept as plain functions the Dash callbacks just call, rather than logic buried inside the callback closures — you can import and call them directly (see `yafi/tests/test_dashboard.py`) to inspect/debug behavior without a browser or running server at all.
+
+**Dependencies**: `matplotlib` and `dash` are separate optional extras (`pip install ".[plot]"` / `".[dashboard]"`, both included if you used `requirements.txt`/`scripts/setup.*`) because they're not close in weight — `dash` pulls in Flask, `plotly`, and about 60 other packages transitively. If you only need static charts, you don't need to install `dash` at all.
+
+**No disk cache**: everything the dash engine fetches is cached in memory only, for the lifetime of that server process. Restarting the dashboard re-fetches everything you check again from scratch. That's intentional for now, not an oversight — ask if you want on-disk caching added.
 
 ## VS Code
 

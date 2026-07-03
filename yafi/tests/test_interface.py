@@ -1,6 +1,7 @@
 import json
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -125,7 +126,15 @@ def _wait_for_button(app, button, timeout=30):
     raise AssertionError('subprocess did not finish in time')
 
 
-def test_plot_button_runs_ticker_time_and_opens_browser():
+def _wait_until(predicate, timeout=30, tick=0.1):
+    for _ in range(int(timeout / tick)):
+        if predicate():
+            return
+        time.sleep(tick)
+    raise AssertionError('condition not met in time')
+
+
+def test_plot_button_launches_and_stops_live_dashboard():
     app = interface.ConfigBuilderApp()
     app.withdraw()
 
@@ -147,7 +156,6 @@ def test_plot_button_runs_ticker_time_and_opens_browser():
     yafi_dir = Path(__file__).resolve().parent.parent
     config_path = interface.CONFIGS_DIR / '_gui_plot_test.json'
     results_path = yafi_dir / 'output' / '_gui_plot_test_output.json'
-    dashboard_path = yafi_dir / 'output' / '_gui_plot_test_output_dashboard.html'
 
     opened_urls = []
     original_open = interface.webbrowser.open
@@ -157,27 +165,78 @@ def test_plot_button_runs_ticker_time_and_opens_browser():
         app._run_query_machine()
         _wait_for_button(app, app.run_button)
         assert results_path.exists()
+        result_symbols = [r['symbol'] for r in json.loads(results_path.read_text())]
+        assert result_symbols
 
         app._plot_with_ticker_time()
-        _wait_for_button(app, app.plot_button)
 
-        log = app.run_output.get('1.0', 'end')
-        assert 'exited with code 0' in log, log
-        assert dashboard_path.exists(), log
-        assert dashboard_path.stat().st_size > 0
+        def ready():
+            app.update()
+            return len(opened_urls) == 1
+        _wait_until(ready, timeout=30)
 
-        assert len(opened_urls) == 1, opened_urls
-        assert opened_urls[0] == dashboard_path.resolve().as_uri()
+        assert app._dash_process is not None
+        assert str(app.plot_button['text']) == 'Stop live dashboard'
+
+        url = opened_urls[0]
+        assert url.startswith('http://127.0.0.1:')
+        # the index page is a JS-hydrated shell; the actual layout is served from
+        # /_dash-layout, so check that instead to confirm our app (not an empty one) is live
+        with urllib.request.urlopen(url.rstrip('/') + '/_dash-layout', timeout=5) as resp:
+            layout = json.loads(resp.read().decode('utf-8'))
+        assert resp.status == 200
+        layout_str = json.dumps(layout)
+        assert 'Ticker time series' in layout_str
+        assert 'group-checklist' in layout_str
+        assert any(symbol in layout_str for symbol in result_symbols), (result_symbols, layout_str)
+
+        app._plot_with_ticker_time()  # second click = stop
+
+        def stopped():
+            app.update()
+            return app._dash_process is None
+        _wait_until(stopped, timeout=15)
+
+        assert str(app.plot_button['text']).startswith('Launch live dashboard')
     finally:
         interface.webbrowser.open = original_open
+        if app._dash_process is not None:
+            app._dash_process.terminate()
         config_path.unlink(missing_ok=True)
         results_path.unlink(missing_ok=True)
-        dashboard_path.unlink(missing_ok=True)
         app.destroy()
+
+
+def test_filename_dropdown_lists_and_prefix_filters_configs():
+    file1 = interface.CONFIGS_DIR / '_dropdown_test_alpha.json'
+    file2 = interface.CONFIGS_DIR / '_dropdown_test_beta_alpha.json'
+    file1.write_text('{}')
+    file2.write_text('{}')
+
+    try:
+        app = interface.ConfigBuilderApp()
+        app.withdraw()
+
+        assert file1.name in app.filename_entry._all_values
+        assert file2.name in app.filename_entry._all_values
+
+        app.filename_entry.delete(0, 'end')
+        app.filename_entry.insert(0, '_dropdown_test_alpha')
+        app.filename_entry._on_keyrelease(type('Event', (), {'keysym': 'a'})())
+
+        filtered = app.filename_entry['values']
+        assert file1.name in filtered, filtered
+        assert file2.name not in filtered, 'substring match should not qualify, only prefix match'
+
+        app.destroy()
+    finally:
+        file1.unlink(missing_ok=True)
+        file2.unlink(missing_ok=True)
 
 
 if __name__ == '__main__':
     test_config_builder_round_trip()
     test_run_query_machine_button()
-    test_plot_button_runs_ticker_time_and_opens_browser()
+    test_plot_button_launches_and_stops_live_dashboard()
+    test_filename_dropdown_lists_and_prefix_filters_configs()
     print('ALL GOOD')

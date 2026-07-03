@@ -53,10 +53,17 @@ def query_metadata(quote_type):
     return sorted(fields), valid_values
 
 
+def list_config_filenames():
+    if not CONFIGS_DIR.exists():
+        return []
+    return sorted(p.name for p in CONFIGS_DIR.glob('*.json'))
+
+
 class AutocompleteCombobox(ttk.Combobox):
-    def __init__(self, master=None, values=(), **kwargs):
+    def __init__(self, master=None, values=(), match='contains', **kwargs):
         super().__init__(master, **kwargs)
         self._all_values = list(values)
+        self._match = match
         self['values'] = self._all_values
         self.bind('<KeyRelease>', self._on_keyrelease)
         self._slow_down_dropdown_scroll()
@@ -79,7 +86,10 @@ class AutocompleteCombobox(ttk.Combobox):
         if not typed:
             self['values'] = self._all_values
             return
-        filtered = [v for v in self._all_values if typed in v.lower()]
+        if self._match == 'startswith':
+            filtered = [v for v in self._all_values if v.lower().startswith(typed)]
+        else:
+            filtered = [v for v in self._all_values if typed in v.lower()]
         self['values'] = filtered or self._all_values
 
 
@@ -99,9 +109,20 @@ class ConfigBuilderApp(tk.Tk):
         self.combinator = tk.StringVar(value='and')
         self.sort_asc = tk.BooleanVar(value=False)
         self.output_format = tk.StringVar(value='json')
+        self._dash_process = None
 
         self._build_widgets()
         self._on_quote_type_change()
+        self._refresh_filename_choices()
+        self.protocol('WM_DELETE_WINDOW', self._on_close)
+
+    def _on_close(self):
+        if self._dash_process is not None:
+            self._dash_process.terminate()
+        self.destroy()
+
+    def _refresh_filename_choices(self):
+        self.filename_entry.set_values(list_config_filenames())
 
     def _build_widgets(self):
         pad = {'padx': 6, 'pady': 4}
@@ -200,8 +221,9 @@ class ConfigBuilderApp(tk.Tk):
         file_frame = ttk.LabelFrame(self, text=f'Save to {CONFIGS_DIR}')
         file_frame.pack(fill='x', **pad)
         ttk.Label(file_frame, text='filename:').pack(side='left', padx=(6, 4))
-        self.filename_entry = ttk.Entry(file_frame, width=30)
+        self.filename_entry = AutocompleteCombobox(file_frame, width=28, match='startswith')
         self.filename_entry.insert(0, 'my_query.json')
+        self.filename_entry.bind('<Button-1>', lambda e: self._refresh_filename_choices())
         self.filename_entry.pack(side='left')
         ttk.Button(file_frame, text='Load', command=self._load_config).pack(side='left', padx=6)
         ttk.Button(file_frame, text='Preview', command=self._refresh_preview).pack(side='left', padx=6)
@@ -218,7 +240,7 @@ class ConfigBuilderApp(tk.Tk):
         run_buttons_row.pack(fill='x', padx=6, pady=4)
         self.run_button = ttk.Button(run_buttons_row, text='Save & run query_machine.py', command=self._run_query_machine)
         self.run_button.pack(side='left')
-        self.plot_button = ttk.Button(run_buttons_row, text='Plot results with ticker_time.py (plotly)',
+        self.plot_button = ttk.Button(run_buttons_row, text='Launch live dashboard (ticker_time.py, dash)',
                                        command=self._plot_with_ticker_time)
         self.plot_button.pack(side='left', padx=(8, 0))
         self.run_output = scrolledtext.ScrolledText(run_frame, height=8, wrap='word', state='disabled')
@@ -386,6 +408,7 @@ class ConfigBuilderApp(tk.Tk):
         path = CONFIGS_DIR / filename
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(config, f, indent=2)
+        self._refresh_filename_choices()
         return path
 
     def _save_config(self):
@@ -425,6 +448,10 @@ class ConfigBuilderApp(tk.Tk):
         return path if path.is_absolute() else script_dir / path
 
     def _plot_with_ticker_time(self):
+        if self._dash_process is not None:
+            self._dash_process.terminate()
+            return
+
         results_path = self._resolve_results_json_path()
         if results_path is None:
             messagebox.showerror(
@@ -437,19 +464,61 @@ class ConfigBuilderApp(tk.Tk):
                                   f'{results_path} does not exist yet. Run query_machine.py first.')
             return
 
-        dashboard_path = results_path.parent / f'{results_path.stem}_dashboard.html'
         script = Path(__file__).resolve().parent / 'ticker_time.py'
-        args = [sys.executable, str(script), str(results_path), '--engine', 'plotly',
-                '--output', str(dashboard_path)]
+        args = [sys.executable, str(script), str(results_path), '--engine', 'dash']
+        output_queue = queue.Queue()
 
-        def open_dashboard():
-            if dashboard_path.exists():
-                webbrowser.open(dashboard_path.resolve().as_uri())
+        self.plot_button.config(text='Stop live dashboard')
+        self.run_output.config(state='normal')
+        self.run_output.insert('end', f'\n$ python ticker_time.py {results_path.name} --engine dash\n')
+        self.run_output.config(state='disabled')
+        self.run_output.see('end')
 
-        self._run_subprocess_streaming(
-            args, self.plot_button,
-            header=f'python ticker_time.py {results_path.name} --engine plotly --output {dashboard_path.name}',
-            on_success=open_dashboard)
+        def worker():
+            process = subprocess.Popen(
+                args,
+                cwd=str(script.parent),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            self._dash_process = process
+            for line in process.stdout:
+                output_queue.put(line)
+            process.wait()
+            output_queue.put(f'\n[dashboard server exited with code {process.returncode}]\n')
+            output_queue.put(None)
+
+        opened_browser = {'done': False}
+
+        def poll():
+            finished = False
+            try:
+                while True:
+                    line = output_queue.get_nowait()
+                    if line is None:
+                        finished = True
+                        break
+                    self.run_output.config(state='normal')
+                    self.run_output.insert('end', line)
+                    self.run_output.see('end')
+                    self.run_output.config(state='disabled')
+                    if not opened_browser['done'] and 'DASHBOARD READY at' in line:
+                        opened_browser['done'] = True
+                        url = line.split('DASHBOARD READY at', 1)[1].strip()
+                        webbrowser.open(url)
+            except queue.Empty:
+                pass
+
+            if finished:
+                self._dash_process = None
+                self.plot_button.config(text='Launch live dashboard (ticker_time.py, dash)')
+            else:
+                self.after(100, poll)
+
+        threading.Thread(target=worker, daemon=True).start()
+        self.after(100, poll)
 
     def _run_subprocess_streaming(self, args, button, header, on_success=None):
         output_queue = queue.Queue()
