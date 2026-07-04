@@ -24,6 +24,8 @@ PROBE_OPERAND = {
 
 COMPARISON_OPERATORS = ['eq', 'gt', 'lt', 'gte', 'lte', 'btwn', 'is-in']
 
+VALUE_FIELDS = ['Open', 'High', 'Low', 'Close', 'Volume']
+
 COMMON_OUTPUT_FIELDS = [
     'symbol', 'shortName', 'longName', 'exchange', 'fullExchangeName', 'currency',
     'quoteType', 'marketState', 'regularMarketPrice', 'regularMarketChange',
@@ -97,7 +99,7 @@ class ConfigBuilderApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title('yafi query config builder')
-        self.geometry('900x980')
+        self.geometry('900x700')
 
         self.conditions = []
         self.output_fields = []
@@ -109,6 +111,7 @@ class ConfigBuilderApp(tk.Tk):
         self.combinator = tk.StringVar(value='and')
         self.sort_asc = tk.BooleanVar(value=False)
         self.output_format = tk.StringVar(value='json')
+        self.plot_value_field_vars = {field: tk.BooleanVar(value=(field == 'Close')) for field in VALUE_FIELDS}
         self._dash_process = None
 
         self._build_widgets()
@@ -127,7 +130,23 @@ class ConfigBuilderApp(tk.Tk):
     def _build_widgets(self):
         pad = {'padx': 6, 'pady': 4}
 
-        top = ttk.Frame(self)
+        canvas = tk.Canvas(self, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(self, orient='vertical', command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side='right', fill='y')
+        canvas.pack(side='left', fill='both', expand=True)
+
+        content = ttk.Frame(canvas)
+        content_window = canvas.create_window((0, 0), window=content, anchor='nw')
+        content.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.bind('<Configure>', lambda e: canvas.itemconfig(content_window, width=e.width))
+
+        def _on_mousewheel(event):
+            canvas.yview_scroll(-1 if event.delta > 0 else 1, 'units')
+        canvas.bind('<Enter>', lambda e: canvas.bind_all('<MouseWheel>', _on_mousewheel))
+        canvas.bind('<Leave>', lambda e: canvas.unbind_all('<MouseWheel>'))
+
+        top = ttk.Frame(content)
         top.pack(fill='x', **pad)
         ttk.Label(top, text='quote_type:').pack(side='left')
         quote_type_box = ttk.Combobox(top, textvariable=self.quote_type, values=list(QUOTE_TYPE_MAP),
@@ -139,7 +158,7 @@ class ConfigBuilderApp(tk.Tk):
         ttk.Radiobutton(top, text='AND', variable=self.combinator, value='and').pack(side='left')
         ttk.Radiobutton(top, text='OR', variable=self.combinator, value='or').pack(side='left')
 
-        cond_frame = ttk.LabelFrame(self, text='Conditions (query)')
+        cond_frame = ttk.LabelFrame(content, text='Conditions (query)')
         cond_frame.pack(fill='x', **pad)
 
         add_row = ttk.Frame(cond_frame)
@@ -171,7 +190,7 @@ class ConfigBuilderApp(tk.Tk):
         self.cond_tree.pack(fill='x', padx=6, pady=(4, 0))
         ttk.Button(cond_frame, text='Remove selected', command=self._remove_condition).pack(anchor='e', padx=6, pady=4)
 
-        settings_frame = ttk.LabelFrame(self, text='Sort / pagination')
+        settings_frame = ttk.LabelFrame(content, text='Sort / pagination')
         settings_frame.pack(fill='x', **pad)
 
         ttk.Label(settings_frame, text='sort_field:').grid(row=0, column=0, sticky='w')
@@ -194,7 +213,7 @@ class ConfigBuilderApp(tk.Tk):
         self.delay_entry.grid(row=2, column=1, sticky='w', padx=4, pady=(6, 0))
 
         fields_frame = ttk.LabelFrame(
-            self, text='Output fields (response keys kept in results.json - different from query fields above)')
+            content, text='Output fields (response keys kept in results.json - different from query fields above)')
         fields_frame.pack(fill='x', **pad)
 
         fields_add_row = ttk.Frame(fields_frame)
@@ -208,7 +227,7 @@ class ConfigBuilderApp(tk.Tk):
         self.fields_listbox.pack(fill='x', padx=6)
         ttk.Button(fields_frame, text='Remove selected', command=self._remove_output_field).pack(anchor='e', padx=6, pady=4)
 
-        output_frame = ttk.LabelFrame(self, text='Output')
+        output_frame = ttk.LabelFrame(content, text='Output')
         output_frame.pack(fill='x', **pad)
         ttk.Label(output_frame, text='format:').grid(row=0, column=0, sticky='w')
         ttk.Combobox(output_frame, textvariable=self.output_format, values=['json', 'csv', 'both'],
@@ -218,7 +237,17 @@ class ConfigBuilderApp(tk.Tk):
         self.output_path_entry.insert(0, 'output/results.json')
         self.output_path_entry.grid(row=0, column=3, sticky='w', padx=4)
 
-        file_frame = ttk.LabelFrame(self, text=f'Save to {CONFIGS_DIR}')
+        ttk.Label(output_frame, text='plot value_field(s):').grid(row=1, column=0, sticky='w', pady=(6, 0))
+        plot_fields_row = ttk.Frame(output_frame)
+        plot_fields_row.grid(row=1, column=1, columnspan=3, sticky='w', pady=(6, 0))
+        for field in VALUE_FIELDS:
+            ttk.Checkbutton(plot_fields_row, text=field, variable=self.plot_value_field_vars[field]
+                             ).pack(side='left', padx=(0, 10))
+        ttk.Label(output_frame, text='(what ticker_time.py/the live dashboard plots; check 2+ to plot them '
+                                      'together on one chart, each with its own color-matched axis)').grid(
+            row=2, column=0, columnspan=4, sticky='w', pady=(2, 0))
+
+        file_frame = ttk.LabelFrame(content, text=f'Save to {CONFIGS_DIR}')
         file_frame.pack(fill='x', **pad)
         ttk.Label(file_frame, text='filename:').pack(side='left', padx=(6, 4))
         self.filename_entry = AutocompleteCombobox(file_frame, width=28, match='startswith')
@@ -229,12 +258,12 @@ class ConfigBuilderApp(tk.Tk):
         ttk.Button(file_frame, text='Preview', command=self._refresh_preview).pack(side='left', padx=6)
         ttk.Button(file_frame, text='Save', command=self._save_config).pack(side='left', padx=6)
 
-        preview_frame = ttk.LabelFrame(self, text='Preview')
+        preview_frame = ttk.LabelFrame(content, text='Preview')
         preview_frame.pack(fill='both', expand=True, **pad)
         self.preview_text = scrolledtext.ScrolledText(preview_frame, height=10, wrap='none')
         self.preview_text.pack(fill='both', expand=True)
 
-        run_frame = ttk.LabelFrame(self, text='Run')
+        run_frame = ttk.LabelFrame(content, text='Run')
         run_frame.pack(fill='both', **pad)
         run_buttons_row = ttk.Frame(run_frame)
         run_buttons_row.pack(fill='x', padx=6, pady=4)
@@ -366,6 +395,12 @@ class ConfigBuilderApp(tk.Tk):
             return self.conditions[0]
         return {'operator': self.combinator.get(), 'operands': list(self.conditions)}
 
+    def _selected_value_fields(self):
+        selected = [field for field in VALUE_FIELDS if self.plot_value_field_vars[field].get()]
+        if not selected:
+            raise ValueError('Check at least one plot value_field.')
+        return selected
+
     def _build_config(self):
         max_results_raw = self.max_results_entry.get().strip()
         config = {
@@ -381,6 +416,7 @@ class ConfigBuilderApp(tk.Tk):
                 'format': self.output_format.get(),
                 'path': self.output_path_entry.get().strip() or 'output/results.json',
             },
+            'value_fields': self._selected_value_fields(),
         }
         return config
 
@@ -464,13 +500,22 @@ class ConfigBuilderApp(tk.Tk):
                                   f'{results_path} does not exist yet. Run query_machine.py first.')
             return
 
+        try:
+            value_fields = self._selected_value_fields()
+        except ValueError as exc:
+            messagebox.showerror('Cannot launch dashboard', str(exc))
+            return
+
         script = Path(__file__).resolve().parent / 'ticker_time.py'
-        args = [sys.executable, str(script), str(results_path), '--engine', 'dash']
+        args = [sys.executable, str(script), str(results_path), '--engine', 'dash',
+                '--value-field', *value_fields]
         output_queue = queue.Queue()
 
         self.plot_button.config(text='Stop live dashboard')
         self.run_output.config(state='normal')
-        self.run_output.insert('end', f'\n$ python ticker_time.py {results_path.name} --engine dash\n')
+        self.run_output.insert(
+            'end', f'\n$ python ticker_time.py {results_path.name} --engine dash '
+                   f'--value-field {" ".join(value_fields)}\n')
         self.run_output.config(state='disabled')
         self.run_output.see('end')
 
@@ -622,6 +667,15 @@ class ConfigBuilderApp(tk.Tk):
         self.output_format.set(output.get('format', 'json'))
         self.output_path_entry.delete(0, 'end')
         self.output_path_entry.insert(0, output.get('path', 'output/results.json'))
+
+        if 'value_fields' in config:
+            loaded_value_fields = config['value_fields']
+        elif 'value_field' in config:
+            loaded_value_fields = [config['value_field']]  # older single-field configs
+        else:
+            loaded_value_fields = ['Close']
+        for field in VALUE_FIELDS:
+            self.plot_value_field_vars[field].set(field in loaded_value_fields)
 
         self._refresh_preview()
 

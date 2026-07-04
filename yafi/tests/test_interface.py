@@ -1,6 +1,8 @@
+import gc
 import json
 import sys
 import time
+import tkinter
 import urllib.request
 from pathlib import Path
 
@@ -44,6 +46,10 @@ def test_config_builder_round_trip():
     app.output_field_box.set('marketCap')
     app._add_output_field()
 
+    app.plot_value_field_vars['Close'].set(False)
+    app.plot_value_field_vars['Open'].set(True)
+    app.plot_value_field_vars['Volume'].set(True)
+
     app.filename_entry.delete(0, 'end')
     app.filename_entry.insert(0, '_gui_smoke_test.json')
     app._save_config()
@@ -56,6 +62,7 @@ def test_config_builder_round_trip():
         assert config['query']['operator'] == 'and'
         assert len(config['query']['operands']) == 3
         assert config['fields'] == ['symbol', 'marketCap']
+        assert config['value_fields'] == ['Open', 'Volume'], 'canonical VALUE_FIELDS order, not check order'
 
         query_machine.build_query(config['query'], query_machine.QUOTE_TYPE_MAP[config['quote_type']])
 
@@ -66,11 +73,14 @@ def test_config_builder_round_trip():
         app2._load_config()
         assert len(app2.conditions) == 3
         assert app2.output_fields == ['symbol', 'marketCap']
+        assert app2._selected_value_fields() == ['Open', 'Volume']
         app2.destroy()
+        gc.collect()  # reclaim app2's tk.Variables now, while its interpreter is still around
     finally:
         saved_path.unlink(missing_ok=True)
 
     app.destroy()
+    gc.collect()
 
 
 def test_run_query_machine_button():
@@ -115,6 +125,7 @@ def test_run_query_machine_button():
         config_path.unlink(missing_ok=True)
         output_path.unlink(missing_ok=True)
         app.destroy()
+        gc.collect()
 
 
 def _wait_for_button(app, button, timeout=30):
@@ -147,6 +158,7 @@ def test_plot_button_launches_and_stops_live_dashboard():
     app.max_results_entry.insert(0, '3')
     app.output_field_box.set('symbol')
     app._add_output_field()
+    app.plot_value_field_vars['Volume'].set(True)  # + the default Close -> exercises multi-field CLI wiring
 
     app.filename_entry.delete(0, 'end')
     app.filename_entry.insert(0, '_gui_plot_test.json')
@@ -190,6 +202,9 @@ def test_plot_button_launches_and_stops_live_dashboard():
         assert 'group-checklist' in layout_str
         assert any(symbol in layout_str for symbol in result_symbols), (result_symbols, layout_str)
 
+        log = app.run_output.get('1.0', 'end')
+        assert '--value-field Close Volume' in log, log
+
         app._plot_with_ticker_time()  # second click = stop
 
         def stopped():
@@ -205,6 +220,7 @@ def test_plot_button_launches_and_stops_live_dashboard():
         config_path.unlink(missing_ok=True)
         results_path.unlink(missing_ok=True)
         app.destroy()
+        gc.collect()
 
 
 def test_filename_dropdown_lists_and_prefix_filters_configs():
@@ -229,9 +245,30 @@ def test_filename_dropdown_lists_and_prefix_filters_configs():
         assert file2.name not in filtered, 'substring match should not qualify, only prefix match'
 
         app.destroy()
+        gc.collect()
     finally:
         file1.unlink(missing_ok=True)
         file2.unlink(missing_ok=True)
+
+
+def test_config_window_is_scrollable():
+    app = interface.ConfigBuilderApp()
+    app.update()
+
+    canvas = next(w for w in app.winfo_children() if isinstance(w, tkinter.Canvas))
+    bbox = canvas.bbox('all')
+    content_height = bbox[3] - bbox[1]
+    assert content_height > canvas.winfo_height(), (
+        'content should be taller than the visible canvas for this test to be meaningful')
+
+    before = canvas.yview()
+    canvas.yview_scroll(5, 'units')
+    app.update()
+    after = canvas.yview()
+    assert after[0] > before[0], 'scrolling did not move the view'
+
+    app.destroy()
+    gc.collect()
 
 
 if __name__ == '__main__':
@@ -239,4 +276,5 @@ if __name__ == '__main__':
     test_run_query_machine_button()
     test_plot_button_launches_and_stops_live_dashboard()
     test_filename_dropdown_lists_and_prefix_filters_configs()
+    test_config_window_is_scrollable()
     print('ALL GOOD')

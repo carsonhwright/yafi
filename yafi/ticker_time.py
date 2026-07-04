@@ -79,7 +79,10 @@ def main():
                          help='Max number of tickers to plot (default: no limit, plot every symbol found).')
     parser.add_argument('--period', default='6mo', help='yfinance history period (e.g. 1mo, 6mo, 1y, 5y, max).')
     parser.add_argument('--interval', default='1d', help='yfinance history interval (e.g. 1d, 1wk, 1mo).')
-    parser.add_argument('--value-field', default='Close', choices=['Open', 'High', 'Low', 'Close', 'Volume'])
+    parser.add_argument('--value-field', nargs='+', default=['Close'],
+                         choices=['Open', 'High', 'Low', 'Close', 'Volume'],
+                         help='One or more OHLCV fields. matplotlib only plots the first one; '
+                              'dash cycles through all of them via a per-chart toggle button.')
     parser.add_argument('--engine', choices=['matplotlib', 'dash'], default='matplotlib',
                          help='matplotlib for a quick static plot, dash for a live dashboard that '
                               'fetches each ticker only when you check it.')
@@ -106,17 +109,22 @@ def main():
 
         if args.output:
             print("note: --output is ignored for --engine dash (there's no file, just a live server)")
-        dashboard.run(symbols, period=args.period, interval=args.interval, value_field=args.value_field,
+        dashboard.run(symbols, period=args.period, interval=args.interval, value_fields=args.value_field,
                       port=args.port, symbol_records=symbol_records)
         return
 
+    value_field = args.value_field[0]
+    if len(args.value_field) > 1:
+        print(f"note: --engine matplotlib only plots one field; using '{value_field}', "
+              f"ignoring {args.value_field[1:]}")
+
     series = fetch_history(symbols, period=args.period, interval=args.interval,
-                            value_field=args.value_field, delay=args.request_delay_seconds)
+                            value_field=value_field, delay=args.request_delay_seconds)
     if not series:
         raise ValueError('No historical data fetched for any symbol.')
 
     df = build_dataframe(series)
-    plot_matplotlib(df, args.value_field, args.output)
+    plot_matplotlib(df, value_field, args.output)
 
 
 if __name__ == '__main__':
