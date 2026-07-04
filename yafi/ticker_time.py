@@ -1,5 +1,6 @@
 import argparse
 import json
+import logging
 import time
 from pathlib import Path
 
@@ -7,6 +8,40 @@ import pandas as pd
 import yfinance as yf
 
 DEFAULT_LIMIT = None
+
+logger = logging.getLogger('yafi.ticker_time')
+
+
+class HistoryContext():
+    """Handler for history collection and analysis of said history.
+
+    Caches both the fetched DataFrame and the yf.Ticker per symbol, so any combination of
+    Open/High/Low/Close/Volume can be read again without refetching (e.g. when the live
+    dashboard's per-chart field checkboxes are toggled).
+    NOTE: this is where memory utilization is going to be a problem for very large symbol lists.
+    """
+    def __init__(self, logger=None):
+        self.dataframes: dict[str, pd.DataFrame] = {}
+        self.tickers: dict[str, yf.Ticker] = {}
+        self.logger = logger or logging.getLogger('yafi.ticker_time')
+
+    def fetch_history_frame(self, symbol, period, interval):
+        """Fetches the full OHLCV history once, caching the result (even a "no data" miss,
+        as None) so a later call for the same symbol never re-hits the network."""
+        self.logger.info('fetching %s (period=%s interval=%s)', symbol, period, interval)
+        start = time.monotonic()
+        self.tickers[symbol] = yf.Ticker(symbol)
+        history = self.tickers[symbol].history(period=period, interval=interval)
+        elapsed = time.monotonic() - start
+
+        if history.empty:
+            self.logger.warning('no data for %s (%.2fs)', symbol, elapsed)
+            self.dataframes[symbol] = None
+            return None
+
+        self.logger.info('fetched %s: %d rows in %.2fs', symbol, len(history), elapsed)
+        self.dataframes[symbol] = history
+        return history
 
 
 def load_symbol_records(results_path, symbol_field='symbol', limit=DEFAULT_LIMIT):
@@ -28,12 +63,12 @@ def load_symbol_records(results_path, symbol_field='symbol', limit=DEFAULT_LIMIT
 def load_symbols(results_path, symbol_field='symbol', limit=DEFAULT_LIMIT):
     return list(load_symbol_records(results_path, symbol_field, limit))
 
-# TODO is the period value configurable?
 def fetch_history(symbols, period='6mo', interval='1d', value_field='Close', delay=0.3):
+    context = HistoryContext()
     series = {}
     for symbol in symbols:
-        history = yf.Ticker(symbol).history(period=period, interval=interval)
-        if history.empty or value_field not in history:
+        history = context.fetch_history_frame(symbol, period, interval)
+        if history is None or value_field not in history:
             print(f"skipping {symbol}: no {value_field} data for period={period} interval={interval}")
             continue
         series[symbol] = history[value_field]

@@ -1,9 +1,9 @@
 import logging
-import time
 
 import plotly.graph_objects as go
-import yfinance as yf
 from dash import ALL, MATCH, Dash, Input, Output, State, dcc, html
+
+from ticker_time import HistoryContext
 
 logger = logging.getLogger('yafi.dashboard')
 
@@ -34,22 +34,6 @@ FIELD_COLORS = {
     'Volume': '#ff7f0e',
 }
 AXIS_STEP = 0.08
-
-
-def fetch_history_frame(symbol, period, interval):
-    """Fetches the full OHLCV history once, so any combination of Open/High/Low/Close/Volume
-    can be plotted from cache afterward without refetching when checkboxes are toggled."""
-    logger.info('fetching %s (period=%s interval=%s)', symbol, period, interval)
-    start = time.monotonic()
-    history = yf.Ticker(symbol).history(period=period, interval=interval)
-    elapsed = time.monotonic() - start
-
-    if history.empty:
-        logger.warning('no data for %s (%.2fs)', symbol, elapsed)
-        return None
-
-    logger.info('fetched %s: %d rows in %.2fs', symbol, len(history), elapsed)
-    return history
 
 
 def make_multi_field_figure(symbol, history, fields):
@@ -124,7 +108,7 @@ def make_field_table(record):
     })
 
 
-def render_charts(order, cache, period, interval, value_fields, symbol_records=None):
+def render_charts(order, cache: HistoryContext, period, interval, value_fields, symbol_records=None):
     """Ensures every symbol in `order` has its full history in `cache` (fetching on first
     sight), then returns (list of panels, status message) for whichever symbols have data.
 
@@ -135,12 +119,11 @@ def render_charts(order, cache, period, interval, value_fields, symbol_records=N
     fetched_this_update = []
 
     for symbol in order:
-        if symbol not in cache:
-            cache[symbol] = fetch_history_frame(symbol, period, interval)
-            if cache[symbol] is not None:
+        if symbol not in cache.dataframes:
+            if cache.fetch_history_frame(symbol, period, interval) is not None:
                 fetched_this_update.append(symbol)
 
-        history = cache[symbol]
+        history = cache.dataframes[symbol]
         if history is None:
             continue
 
@@ -166,7 +149,7 @@ def render_charts(order, cache, period, interval, value_fields, symbol_records=N
         }))
 
     status = (f'{len(order)} checked, {len(fetched_this_update)} fetched this update, '
-              f'{len(cache)} cached total')
+              f'{len(cache.dataframes)} cached total')
     logger.info(status)
     return panels, status
 
@@ -174,7 +157,7 @@ def render_charts(order, cache, period, interval, value_fields, symbol_records=N
 def build_app(symbols, period='6mo', interval='1d', value_fields=None, symbol_records=None):
     value_fields = value_fields or ['Close']
     app = Dash(__name__)
-    history_cache = {}
+    hcontext = HistoryContext()
     groups = _chunk(symbols, CHECKLIST_GROUP_SIZE)
 
     group_sections = []
@@ -239,7 +222,7 @@ def build_app(symbols, period='6mo', interval='1d', value_fields=None, symbol_re
         Input('checked-order', 'data'),
     )
     def on_order_change(order):
-        return render_charts(order or [], history_cache, period, interval, value_fields, symbol_records)
+        return render_charts(order or [], hcontext, period, interval, value_fields, symbol_records)
 
     if len(value_fields) > 1:
         @app.callback(
@@ -250,7 +233,7 @@ def build_app(symbols, period='6mo', interval='1d', value_fields=None, symbol_re
         )
         def on_field_checklist_change(checked_fields, checklist_id):
             symbol = checklist_id['index']
-            history = history_cache[symbol]
+            history = hcontext.dataframes[symbol]
             ordered_fields = [field for field in value_fields if field in (checked_fields or [])]
             logger.info('%s: now plotting %s', symbol, ordered_fields)
             return make_multi_field_figure(symbol, history, ordered_fields)

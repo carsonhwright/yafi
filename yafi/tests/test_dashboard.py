@@ -4,6 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import dashboard
+from ticker_time import HistoryContext
 
 
 def test_compute_check_order():
@@ -24,7 +25,7 @@ def test_compute_check_order():
 
 
 def test_make_multi_field_figure_colors_match_trace_and_axis():
-    history = dashboard.fetch_history_frame('NVDA', '1mo', '1d')
+    history = HistoryContext().fetch_history_frame('NVDA', '1mo', '1d')
 
     fig = dashboard.make_multi_field_figure('NVDA', history, ['Close', 'Volume'])
     assert len(fig.data) == 2
@@ -41,7 +42,7 @@ def test_make_multi_field_figure_colors_match_trace_and_axis():
 
 
 def test_make_multi_field_figure_adds_free_offset_axis_for_a_third_field():
-    history = dashboard.fetch_history_frame('NVDA', '1mo', '1d')
+    history = HistoryContext().fetch_history_frame('NVDA', '1mo', '1d')
     fig = dashboard.make_multi_field_figure('NVDA', history, ['Open', 'Close', 'Volume'])
     assert len(fig.data) == 3
 
@@ -53,18 +54,33 @@ def test_make_multi_field_figure_adds_free_offset_axis_for_a_third_field():
 
 
 def test_make_multi_field_figure_with_no_fields_is_empty_but_does_not_crash():
-    history = dashboard.fetch_history_frame('NVDA', '1mo', '1d')
+    history = HistoryContext().fetch_history_frame('NVDA', '1mo', '1d')
     fig = dashboard.make_multi_field_figure('NVDA', history, [])
     assert len(fig.data) == 0
     assert 'NVDA' in fig.layout.title.text
 
 
+def test_history_context_caches_dataframes_and_tickers():
+    context = HistoryContext()
+    history = context.fetch_history_frame('NVDA', '1mo', '1d')
+    assert history is not None
+    assert context.dataframes['NVDA'] is history
+    assert 'NVDA' in context.tickers
+
+
+def test_history_context_caches_the_no_data_case_too():
+    context = HistoryContext()
+    history = context.fetch_history_frame('NOT_A_REAL_TICKER_XYZ', '1mo', '1d')
+    assert history is None
+    assert context.dataframes['NOT_A_REAL_TICKER_XYZ'] is None, 'a miss should be cached too, not just a hit'
+
+
 def test_render_charts_lazy_fetch_and_cache():
-    cache = {}
+    cache = HistoryContext()
 
     graphs, status = dashboard.render_charts(['NVDA'], cache, '1mo', '1d', ['Close'])
     assert len(graphs) == 1
-    assert 'NVDA' in cache and cache['NVDA'] is not None
+    assert 'NVDA' in cache.dataframes and cache.dataframes['NVDA'] is not None
     assert '1 fetched this update' in status
     assert '1 cached total' in status
 
@@ -85,15 +101,15 @@ def test_render_charts_lazy_fetch_and_cache():
 
 
 def test_render_charts_skips_symbols_with_no_data():
-    cache = {}
+    cache = HistoryContext()
     graphs, status = dashboard.render_charts(['NOT_A_REAL_TICKER_XYZ'], cache, '1mo', '1d', ['Close'])
     assert graphs == []
-    assert cache['NOT_A_REAL_TICKER_XYZ'] is None
+    assert cache.dataframes['NOT_A_REAL_TICKER_XYZ'] is None
     assert '0 fetched this update' in status
 
 
 def test_render_charts_includes_field_table_when_record_available():
-    cache = {}
+    cache = HistoryContext()
     symbol_records = {
         'NVDA': {'symbol': 'NVDA', 'longName': 'NVIDIA Corporation', 'marketCap': 4600000000000},
     }
@@ -113,7 +129,7 @@ def test_render_charts_includes_field_table_when_record_available():
 
 
 def test_render_charts_adds_field_checklist_for_multiple_value_fields():
-    cache = {}
+    cache = HistoryContext()
     panels, _ = dashboard.render_charts(['NVDA'], cache, '1mo', '1d', ['Close', 'Volume'])
     assert len(panels) == 1
     checklist, graph = panels[0].children
@@ -129,6 +145,8 @@ if __name__ == '__main__':
     test_make_multi_field_figure_colors_match_trace_and_axis()
     test_make_multi_field_figure_adds_free_offset_axis_for_a_third_field()
     test_make_multi_field_figure_with_no_fields_is_empty_but_does_not_crash()
+    test_history_context_caches_dataframes_and_tickers()
+    test_history_context_caches_the_no_data_case_too()
     test_render_charts_lazy_fetch_and_cache()
     test_render_charts_skips_symbols_with_no_data()
     test_render_charts_includes_field_table_when_record_available()
