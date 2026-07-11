@@ -237,7 +237,9 @@ etf.valid_values['fundfamilyname']
 python yafi/interface.py
 ```
 
-Pick a `quote_type`, add conditions (field/operator/value — constrained fields like `exchange` or `sector` get a picker populated from yfinance's own valid-value lists instead of free text), set sort/pagination/output settings, then **Save** to `yafi/configs/<name>.json`. **Load** reads an existing config back into the form — it handles the flat AND/OR-of-conditions shape every config in this repo uses; nested and/or groups aren't supported by the UI and it'll tell you to edit the JSON directly rather than silently mangling it.
+Pick a `quote_type`, add conditions (field/operator/value — constrained fields like `exchange` or `sector` get a picker populated from yfinance's own valid-value lists instead of free text), set sort/pagination/output settings, then **Save** to `yafi/configs/<name>.json`.
+
+Conditions combine with one top-level AND/OR, same as before, but a condition can now also be a **group** — a nested AND/OR of its own — for things like `exchange = NYQ AND (industry = Advertising Agencies OR industry = Aerospace & Defense)`. Pick the group's logic (AND/OR), **Start group**, add 2+ conditions (they go into the group instead of the top level while it's open), then **End group** (refused if the group has fewer than 2 conditions). The condition list is a tree — a group's conditions nest visibly under it — and **Remove selected** works on either a single condition inside a group or a whole group at once. Groups are exactly one level deep (a group holds plain conditions, not further nested groups); **Load** will tell you to edit the JSON directly if it finds anything deeper than that.
 
 **Save & run query_machine.py** (below the preview panel) writes the current form to the filename you entered and immediately runs `query_machine.py` against it in a background subprocess, streaming its console output (page-by-page fetch progress, final result count) into a read-only log box so you don't have to switch to a terminal.
 

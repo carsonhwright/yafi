@@ -12,15 +12,35 @@
         ]
       },
       {
-        "operator": "is-in",
+        "operator": "or",
         "operands": [
-          "industry",
-          "Biotechnology"
+          {
+            "operator": "is-in",
+            "operands": [
+              "industry",
+              "Biotechnology"
+            ]
+          },
+          {
+            "operator": "is-in",
+            "operands": [
+              "industry",
+              "Chemicals"
+            ]
+          }
+        ]
+      },
+      {
+        "operator": "btwn",
+        "operands": [
+          "peratio.lasttwelvemonths",
+          -50,
+          30
         ]
       }
     ]
   },
-  "sort_field": "intradaymarketcap",
+  "sort_field": "totaldebtequity.lasttwelvemonths",
   "sort_asc": false,
   "page_size": 250,
   "max_results": null,
@@ -32,11 +52,12 @@
     "marketCap",
     "trailingPE",
     "forwardPE",
-    "dividendRate"
+    "dividendRate",
+    "averageAnalystRating"
   ],
   "output": {
     "format": "json",
-    "path": "output/industry_results.csv"
+    "path": "output/industry_results.json"
   },
   "value_fields": [
     "Close",

@@ -102,6 +102,7 @@ class ConfigBuilderApp(tk.Tk):
         self.geometry('900x700')
 
         self.conditions = []
+        self.current_group = None
         self.output_fields = []
         self.query_fields = []
         self.valid_values = {}
@@ -109,6 +110,7 @@ class ConfigBuilderApp(tk.Tk):
 
         self.quote_type = tk.StringVar(value='equity')
         self.combinator = tk.StringVar(value='and')
+        self.group_combinator = tk.StringVar(value='or')
         self.sort_asc = tk.BooleanVar(value=False)
         self.output_format = tk.StringVar(value='json')
         self.plot_value_field_vars = {field: tk.BooleanVar(value=(field == 'Close')) for field in VALUE_FIELDS}
@@ -182,9 +184,25 @@ class ConfigBuilderApp(tk.Tk):
 
         ttk.Button(cond_frame, text='Add condition', command=self._add_condition).pack(anchor='e', padx=6)
 
+        group_row = ttk.Frame(cond_frame)
+        group_row.pack(fill='x', padx=6, pady=(4, 0))
+        ttk.Label(group_row, text='New group logic:').pack(side='left')
+        ttk.Radiobutton(group_row, text='AND', variable=self.group_combinator, value='and').pack(side='left')
+        ttk.Radiobutton(group_row, text='OR', variable=self.group_combinator, value='or').pack(side='left')
+        ttk.Button(group_row, text='Start group', command=self._start_group).pack(side='left', padx=(10, 4))
+        ttk.Button(group_row, text='End group', command=self._end_group).pack(side='left')
+        self.group_status_label = ttk.Label(group_row, text='Adding to: top level', foreground='#666')
+        self.group_status_label.pack(side='left', padx=(10, 0))
+        ttk.Label(cond_frame, text='A group is a nested (AND) or (OR) of conditions, e.g. exchange=NYQ AND '
+                                    '(industry=Advertising OR industry=Aerospace). Groups hold plain conditions '
+                                    'only, not further nested groups.', foreground='#666', wraplength=760,
+                  justify='left').pack(anchor='w', padx=6, pady=(2, 0))
+
         self.cond_tree = ttk.Treeview(cond_frame, columns=('operator', 'field', 'values'),
-                                       show='headings', height=6)
-        for col, width in (('operator', 70), ('field', 260), ('values', 380)):
+                                       show='tree headings', height=8)
+        self.cond_tree.heading('#0', text='')
+        self.cond_tree.column('#0', width=90)
+        for col, width in (('operator', 70), ('field', 230), ('values', 340)):
             self.cond_tree.heading(col, text=col)
             self.cond_tree.column(col, width=width)
         self.cond_tree.pack(fill='x', padx=6, pady=(4, 0))
@@ -364,15 +382,80 @@ class ConfigBuilderApp(tk.Tk):
             messagebox.showerror('Invalid value', str(exc))
             return
 
-        operands = [field] + values
-        self.conditions.append({'operator': operator, 'operands': operands})
-        self.cond_tree.insert('', 'end', values=(operator, field, ', '.join(str(v) for v in values)))
+        leaf = {'kind': 'leaf', 'operator': operator, 'operands': [field] + values}
+        if self.current_group is not None:
+            self.current_group['children'].append(leaf)
+        else:
+            self.conditions.append(leaf)
+        self._update_group_status()
+        self._rebuild_condition_tree()
+
+    def _start_group(self):
+        if self.current_group is not None:
+            messagebox.showerror('Already in a group', 'End the current group before starting a new one.')
+            return
+        self.current_group = {'kind': 'group', 'combinator': self.group_combinator.get(), 'children': []}
+        self.conditions.append(self.current_group)
+        self._update_group_status()
+        self._rebuild_condition_tree()
+
+    def _end_group(self):
+        if self.current_group is None:
+            return
+        if len(self.current_group['children']) < 2:
+            messagebox.showerror('Group too small', 'A group needs at least 2 conditions before you can close it.')
+            return
+        self.current_group = None
+        self._update_group_status()
+
+    def _update_group_status(self):
+        if self.current_group is None:
+            self.group_status_label.config(text='Adding to: top level')
+        else:
+            combinator = self.current_group['combinator'].upper()
+            count = len(self.current_group['children'])
+            self.group_status_label.config(text=f'Adding to: group ({combinator}) - {count} condition(s)')
+
+    def _rebuild_condition_tree(self):
+        self.cond_tree.delete(*self.cond_tree.get_children())
+        for item in self.conditions:
+            if item['kind'] == 'leaf':
+                operator, field, values = item['operator'], item['operands'][0], item['operands'][1:]
+                self.cond_tree.insert('', 'end', text='condition',
+                                       values=(operator, field, ', '.join(str(v) for v in values)))
+            else:
+                group_id = self.cond_tree.insert(
+                    '', 'end', text=f"GROUP ({item['combinator'].upper()})",
+                    values=('', '', f"{len(item['children'])} condition(s)"), open=True)
+                for leaf in item['children']:
+                    operator, field, values = leaf['operator'], leaf['operands'][0], leaf['operands'][1:]
+                    self.cond_tree.insert(group_id, 'end', text='condition',
+                                           values=(operator, field, ', '.join(str(v) for v in values)))
 
     def _remove_condition(self):
+        top_level_indices = set()
+        leaf_locations = []  # (top_level_group_index, leaf_index)
+
         for item in self.cond_tree.selection():
-            index = self.cond_tree.index(item)
+            parent = self.cond_tree.parent(item)
+            if parent:
+                leaf_locations.append((self.cond_tree.index(parent), self.cond_tree.index(item)))
+            else:
+                top_level_indices.add(self.cond_tree.index(item))
+
+        # a leaf whose whole group is also being removed doesn't need separate handling
+        leaf_locations = [(g, l) for g, l in leaf_locations if g not in top_level_indices]
+
+        for group_index, leaf_index in sorted(leaf_locations, key=lambda t: (t[0], -t[1])):
+            del self.conditions[group_index]['children'][leaf_index]
+
+        for index in sorted(top_level_indices, reverse=True):
+            if self.conditions[index] is self.current_group:
+                self.current_group = None
             del self.conditions[index]
-            self.cond_tree.delete(item)
+
+        self._update_group_status()
+        self._rebuild_condition_tree()
 
     def _add_output_field(self):
         field = self.output_field_box.get().strip()
@@ -391,9 +474,24 @@ class ConfigBuilderApp(tk.Tk):
     def _build_query_dict(self):
         if not self.conditions:
             raise ValueError('Add at least one condition.')
-        if len(self.conditions) == 1:
-            return self.conditions[0]
-        return {'operator': self.combinator.get(), 'operands': list(self.conditions)}
+
+        nodes = []
+        for item in self.conditions:
+            if item['kind'] == 'leaf':
+                nodes.append({'operator': item['operator'], 'operands': item['operands']})
+            else:
+                if len(item['children']) < 2:
+                    raise ValueError(
+                        f"A group needs at least 2 conditions (has {len(item['children'])}).")
+                nodes.append({
+                    'operator': item['combinator'],
+                    'operands': [{'operator': leaf['operator'], 'operands': leaf['operands']}
+                                 for leaf in item['children']],
+                })
+
+        if len(nodes) == 1:
+            return nodes[0]
+        return {'operator': self.combinator.get(), 'operands': nodes}
 
     def _selected_value_fields(self):
         selected = [field for field in VALUE_FIELDS if self.plot_value_field_vars[field].get()]
@@ -634,7 +732,7 @@ class ConfigBuilderApp(tk.Tk):
             config = json.load(f)
 
         try:
-            combinator, leaves = _parse_query_tree(config['query'])
+            combinator, items = _parse_query_tree(config['query'])
         except ValueError as exc:
             messagebox.showerror('Cannot load query', str(exc))
             return
@@ -643,11 +741,10 @@ class ConfigBuilderApp(tk.Tk):
         self._on_quote_type_change()
 
         self.combinator.set(combinator)
-        self.conditions = []
-        self.cond_tree.delete(*self.cond_tree.get_children())
-        for operator, field, values in leaves:
-            self.conditions.append({'operator': operator, 'operands': [field] + values})
-            self.cond_tree.insert('', 'end', values=(operator, field, ', '.join(str(v) for v in values)))
+        self.conditions = items
+        self.current_group = None
+        self._update_group_status()
+        self._rebuild_condition_tree()
 
         self.sort_field_box.set(config.get('sort_field') or '')
         self.sort_asc.set(bool(config.get('sort_asc', False)))
@@ -687,20 +784,37 @@ def _to_number(text):
         return float(text)
 
 
+def _parse_leaf(node):
+    return {'kind': 'leaf', 'operator': node['operator'].lower(), 'operands': node['operands']}
+
+
 def _parse_query_tree(node):
+    """Returns (top_level_combinator, items) where each item is either a leaf condition or a
+    one-level-deep and/or group of leaves. Anything nested more than 2 levels isn't supported
+    by this editor; callers should tell the user to edit the JSON directly for those."""
     operator = node['operator'].lower()
     operands = node['operands']
-    if operator in ('and', 'or'):
-        leaves = []
-        for sub in operands:
-            if not isinstance(sub, dict):
-                raise ValueError('Malformed query tree.')
-            sub_op = sub['operator'].lower()
-            if sub_op in ('and', 'or'):
-                raise ValueError('This query has nested and/or groups; edit the JSON file directly.')
-            leaves.append((sub_op, sub['operands'][0], sub['operands'][1:]))
-        return operator, leaves
-    return 'and', [(operator, operands[0], operands[1:])]
+    if operator not in ('and', 'or'):
+        return 'and', [_parse_leaf(node)]
+
+    items = []
+    for sub in operands:
+        if not isinstance(sub, dict):
+            raise ValueError('Malformed query tree.')
+        sub_op = sub['operator'].lower()
+        if sub_op in ('and', 'or'):
+            children = []
+            for leaf in sub['operands']:
+                if not isinstance(leaf, dict):
+                    raise ValueError('Malformed query tree.')
+                if leaf['operator'].lower() in ('and', 'or'):
+                    raise ValueError('This query nests and/or groups more than 2 levels deep; '
+                                      'edit the JSON file directly.')
+                children.append(_parse_leaf(leaf))
+            items.append({'kind': 'group', 'combinator': sub_op, 'children': children})
+        else:
+            items.append(_parse_leaf(sub))
+    return operator, items
 
 
 def main():

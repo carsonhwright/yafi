@@ -271,10 +271,152 @@ def test_config_window_is_scrollable():
     gc.collect()
 
 
+def _add_leaf(app, field, operator, value=None, values=None, low=None, high=None):
+    app.field_box.set(field)
+    app.operator_box.set(operator)
+    app._on_field_or_operator_change()
+    if operator == 'btwn':
+        app._value_widgets['low'].insert(0, str(low))
+        app._value_widgets['high'].insert(0, str(high))
+    elif operator == 'is-in' and app._value_widgets['kind'] == 'is-in-list':
+        listbox = app._value_widgets['listbox']
+        options = list(listbox.get(0, 'end'))
+        for v in values:
+            listbox.selection_set(options.index(v))
+    elif app._value_widgets['kind'] == 'single':
+        app._value_widgets['entry'].set(str(value)) if hasattr(app._value_widgets['entry'], 'set') \
+            else app._value_widgets['entry'].insert(0, str(value))
+    app._add_condition()
+
+
+def test_nested_group_conditions():
+    # exchange == NYQ AND (sector == Technology OR peratio.lasttwelvemonths < 15)
+    # the OR mixes two DIFFERENT fields, so it genuinely needs a nested group -
+    # unlike the user's literal example, which is-in alone could already express.
+    app = interface.ConfigBuilderApp()
+    app.withdraw()
+
+    _add_leaf(app, 'exchange', 'eq', value='NYQ')
+    assert app.current_group is None
+    assert len(app.conditions) == 1
+
+    app.group_combinator.set('or')
+    app._start_group()
+    assert app.current_group is not None
+    assert len(app.conditions) == 2, 'the group itself is appended to conditions immediately'
+
+    _add_leaf(app, 'sector', 'eq', value='Technology')
+    _add_leaf(app, 'peratio.lasttwelvemonths', 'lt', value=15)
+    assert len(app.current_group['children']) == 2
+
+    app._end_group()
+    assert app.current_group is None
+
+    query = app._build_query_dict()
+    assert query['operator'] == 'and'
+    assert len(query['operands']) == 2
+    exchange_leaf, group_node = query['operands']
+    assert exchange_leaf == {'operator': 'eq', 'operands': ['exchange', 'NYQ']}
+    assert group_node['operator'] == 'or'
+    assert group_node['operands'] == [
+        {'operator': 'eq', 'operands': ['sector', 'Technology']},
+        {'operator': 'lt', 'operands': ['peratio.lasttwelvemonths', 15]},
+    ]
+
+    # this is the real proof: yfinance itself must accept the nested structure
+    built = query_machine.build_query(query, query_machine.QUOTE_TYPE_MAP['equity'])
+    assert built is not None
+
+    app.filename_entry.delete(0, 'end')
+    app.filename_entry.insert(0, '_gui_nested_group_test.json')
+    app._save_config()
+
+    saved_path = interface.CONFIGS_DIR / '_gui_nested_group_test.json'
+    try:
+        app2 = interface.ConfigBuilderApp()
+        app2.withdraw()
+        app2.filename_entry.delete(0, 'end')
+        app2.filename_entry.insert(0, '_gui_nested_group_test.json')
+        app2._load_config()
+
+        assert len(app2.conditions) == 2
+        assert app2.conditions[0] == {'kind': 'leaf', 'operator': 'eq', 'operands': ['exchange', 'NYQ']}
+        assert app2.conditions[1]['kind'] == 'group'
+        assert app2.conditions[1]['combinator'] == 'or'
+        assert len(app2.conditions[1]['children']) == 2
+
+        assert app2._build_query_dict() == query, 'round trip must reproduce the exact same query tree'
+
+        app2.destroy()
+        gc.collect()
+    finally:
+        saved_path.unlink(missing_ok=True)
+
+    app.destroy()
+    gc.collect()
+
+
+def test_end_group_requires_at_least_two_conditions():
+    app = interface.ConfigBuilderApp()
+    app.withdraw()
+
+    original_showerror = interface.messagebox.showerror
+    errors = []
+    interface.messagebox.showerror = lambda title, message: errors.append((title, message))
+    try:
+        app._start_group()
+        _add_leaf(app, 'exchange', 'eq', value='NYQ')
+        app._end_group()  # only 1 condition so far -> refused, stays in the group
+
+        assert app.current_group is not None, 'a too-small group must not be closeable'
+        assert len(errors) == 1
+    finally:
+        interface.messagebox.showerror = original_showerror
+
+    app.destroy()
+    gc.collect()
+
+
+def test_remove_condition_handles_groups_and_leaves_within_groups():
+    app = interface.ConfigBuilderApp()
+    app.withdraw()
+
+    _add_leaf(app, 'exchange', 'eq', value='NYQ')
+    app._start_group()
+    _add_leaf(app, 'sector', 'eq', value='Technology')
+    _add_leaf(app, 'peratio.lasttwelvemonths', 'lt', value=15)
+    app._end_group()
+    assert len(app.conditions) == 2
+    assert len(app.conditions[1]['children']) == 2
+
+    # remove just one leaf from within the group (the tree's 2nd top-level item's 2nd child)
+    group_tree_id = app.cond_tree.get_children('')[1]
+    leaf_tree_id = app.cond_tree.get_children(group_tree_id)[1]
+    app.cond_tree.selection_set(leaf_tree_id)
+    app._remove_condition()
+
+    assert len(app.conditions) == 2
+    assert len(app.conditions[1]['children']) == 1, 'only the selected leaf should be removed'
+
+    # now remove the whole group (the top-level item itself)
+    group_tree_id = app.cond_tree.get_children('')[1]
+    app.cond_tree.selection_set(group_tree_id)
+    app._remove_condition()
+
+    assert len(app.conditions) == 1
+    assert app.conditions[0]['operands'] == ['exchange', 'NYQ']
+
+    app.destroy()
+    gc.collect()
+
+
 if __name__ == '__main__':
     test_config_builder_round_trip()
     test_run_query_machine_button()
     test_plot_button_launches_and_stops_live_dashboard()
     test_filename_dropdown_lists_and_prefix_filters_configs()
     test_config_window_is_scrollable()
+    test_nested_group_conditions()
+    test_end_group_requires_at_least_two_conditions()
+    test_remove_condition_handles_groups_and_leaves_within_groups()
     print('ALL GOOD')

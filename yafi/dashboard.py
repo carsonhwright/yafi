@@ -1,8 +1,10 @@
 import logging
 
+import pandas as pd
 import plotly.graph_objects as go
 from dash import ALL, MATCH, Dash, Input, Output, State, dcc, html
 
+from data_analysis import where_is_outside_stddev
 from ticker_time import HistoryContext
 
 logger = logging.getLogger('yafi.dashboard')
@@ -34,13 +36,46 @@ FIELD_COLORS = {
     'Volume': '#ff7f0e',
 }
 AXIS_STEP = 0.08
+OUTLIER_MARKER_COLOR = '#e63946'
+
+# Registry of per-chart analysis buttons: name -> (button label, df/field -> positional indexes).
+# Each entry gets its own toggle button (see render_charts); add an entry here to add a button,
+# no other wiring needed. The function must take (df, field) and return positions usable to
+# index back into df[field] (see data_analysis.where_is_outside_stddev). The label comes from
+# the function's own @tag(...) (see decos.py) so the button text lives next to the function it names.
+ANALYSIS_FUNCTIONS = {
+    'outside_stddev': (where_is_outside_stddev.tag, where_is_outside_stddev),
+}
 
 
-def make_multi_field_figure(symbol, history, fields):
+def _contiguous_ranges(positions):
+    """Collapses a set of positional indexes into (start, end) runs of consecutive positions,
+    so e.g. {2, 3, 4, 9} becomes [(2, 4), (9, 9)] - one shaded band per run instead of one per point."""
+    if not positions:
+        return []
+    ordered = sorted(positions)
+    ranges = []
+    start = prev = ordered[0]
+    for pos in ordered[1:]:
+        if pos == prev + 1:
+            prev = pos
+        else:
+            ranges.append((start, prev))
+            start = prev = pos
+    ranges.append((start, prev))
+    return ranges
+
+
+def make_multi_field_figure(symbol, history, fields, active_highlights=None):
     """Plots every field in `fields` as its own trace with its own y-axis, each axis colored
     to match its trace (first field on the left, second on the right, further ones stacked
     further out on alternating sides) so differently-scaled fields (e.g. Close vs Volume)
-    stay individually readable while still being visually comparable on one chart."""
+    stay individually readable while still being visually comparable on one chart.
+
+    `active_highlights` is a {name: func} subset of ANALYSIS_FUNCTIONS's functions - whichever
+    analysis buttons are currently toggled on for this chart. Wherever any of them flags a
+    position (across any plotted field), that x-range gets a shaded background band spanning
+    the full chart height; with none active, the chart has no shading."""
     fig = go.Figure()
 
     if not fields:
@@ -58,10 +93,9 @@ def make_multi_field_figure(symbol, history, fields):
         series = history[field]
         suffix = '' if i == 0 else str(i + 1)
 
-        fig.add_trace(go.Scatter(
-            x=series.index, y=series.values, mode='lines', name=field,
-            line={'color': color}, yaxis='y' + suffix,
-        ))
+        trace_kwargs = {'x': series.index, 'y': series.values, 'name': field, 'mode': 'lines',
+                         'line': {'color': color}, 'yaxis': 'y' + suffix}
+        fig.add_trace(go.Scatter(**trace_kwargs))
 
         axis_layout = {
             'title': {'text': field, 'font': {'color': color}},
@@ -85,6 +119,18 @@ def make_multi_field_figure(symbol, history, fields):
             axis_layout.update({'overlaying': 'y', 'anchor': 'free', 'side': side, 'position': position})
 
         fig.update_layout(**{f'yaxis{suffix}': axis_layout})
+
+    if active_highlights:
+        flagged = set()
+        for field in fields:
+            for highlight_fn in active_highlights.values():
+                flagged.update(highlight_fn(history, field).tolist())
+
+        index = history.index
+        step = index[1] - index[0] if len(index) > 1 else pd.Timedelta(days=1)
+        for start, end in _contiguous_ranges(flagged):
+            fig.add_vrect(x0=index[start] - step / 2, x1=index[end] + step / 2,
+                          fillcolor=OUTLIER_MARKER_COLOR, opacity=0.2, line_width=0, layer='below')
 
     fig.update_layout(
         title=symbol, height=280, showlegend=False,
@@ -138,6 +184,18 @@ def render_charts(order, cache: HistoryContext, period, interval, value_fields, 
                 inline=True,
                 labelStyle={'marginRight': '10px', 'fontSize': '11px'},
             ))
+
+        panel_children.append(html.Div([
+            html.Button(label, id={'type': 'analysis-button', 'index': symbol, 'name': name}, n_clicks=0,
+                        style={'fontSize': '11px'})
+            for name, (label, _func) in ANALYSIS_FUNCTIONS.items()
+        ], style={'display': 'flex', 'gap': '6px', 'margin': '4px 0'}))
+
+        panel_children.append(dcc.Store(id={'type': 'active-fields', 'index': symbol}, data=list(value_fields)))
+        panel_children.extend(
+            dcc.Store(id={'type': 'highlight-flag', 'index': symbol, 'name': name}, data=False)
+            for name in ANALYSIS_FUNCTIONS
+        )
         panel_children.append(dcc.Graph(id={'type': 'panel-graph', 'index': symbol}, figure=fig))
 
         record = symbol_records.get(symbol)
@@ -226,17 +284,43 @@ def build_app(symbols, period='6mo', interval='1d', value_fields=None, symbol_re
 
     if len(value_fields) > 1:
         @app.callback(
-            Output({'type': 'panel-graph', 'index': MATCH}, 'figure'),
+            Output({'type': 'active-fields', 'index': MATCH}, 'data'),
             Input({'type': 'field-checklist', 'index': MATCH}, 'value'),
-            State({'type': 'field-checklist', 'index': MATCH}, 'id'),
             prevent_initial_call=True,
         )
-        def on_field_checklist_change(checked_fields, checklist_id):
-            symbol = checklist_id['index']
-            history = hcontext.dataframes[symbol]
-            ordered_fields = [field for field in value_fields if field in (checked_fields or [])]
-            logger.info('%s: now plotting %s', symbol, ordered_fields)
-            return make_multi_field_figure(symbol, history, ordered_fields)
+        def on_field_checklist_change(checked_fields):
+            return [field for field in value_fields if field in (checked_fields or [])]
+
+    @app.callback(
+        Output({'type': 'highlight-flag', 'index': MATCH, 'name': MATCH}, 'data'),
+        Output({'type': 'analysis-button', 'index': MATCH, 'name': MATCH}, 'children'),
+        Input({'type': 'analysis-button', 'index': MATCH, 'name': MATCH}, 'n_clicks'),
+        State({'type': 'analysis-button', 'index': MATCH, 'name': MATCH}, 'id'),
+        prevent_initial_call=True,
+    )
+    def on_analysis_button_click(n_clicks, button_id):
+        name = button_id['name']
+        label, _func = ANALYSIS_FUNCTIONS[name]
+        active = bool(n_clicks % 2)
+        logger.info('%s: %s %s', button_id['index'], label, 'on' if active else 'off')
+        return active, (f'Remove: {label}' if active else label)
+
+    @app.callback(
+        Output({'type': 'panel-graph', 'index': MATCH}, 'figure'),
+        Input({'type': 'active-fields', 'index': MATCH}, 'data'),
+        Input({'type': 'highlight-flag', 'index': MATCH, 'name': ALL}, 'data'),
+        State({'type': 'highlight-flag', 'index': MATCH, 'name': ALL}, 'id'),
+        State({'type': 'active-fields', 'index': MATCH}, 'id'),
+        prevent_initial_call=True,
+    )
+    def on_panel_redraw(active_fields, highlight_flags, highlight_ids, active_fields_id):
+        symbol = active_fields_id['index']
+        history = hcontext.dataframes[symbol]
+        active_highlights = {
+            hid['name']: ANALYSIS_FUNCTIONS[hid['name']][1]
+            for hid, flag in zip(highlight_ids, highlight_flags) if flag
+        }
+        return make_multi_field_figure(symbol, history, active_fields or [], active_highlights=active_highlights)
 
     return app
 
